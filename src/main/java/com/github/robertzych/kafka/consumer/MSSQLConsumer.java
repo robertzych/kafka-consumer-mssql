@@ -3,6 +3,7 @@ package com.github.robertzych.kafka.consumer;
 import io.confluent.kafka.serializers.KafkaJsonDeserializerConfig;
 import io.confluent.kafka.serializers.json.KafkaJsonSchemaDeserializer;
 import org.apache.kafka.clients.consumer.*;
+import org.apache.kafka.common.TopicPartition;
 import org.apache.kafka.common.serialization.StringDeserializer;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -39,6 +40,12 @@ public class MSSQLConsumer {
         final Consumer<String, Book> consumer = new KafkaConsumer<>(props);
         consumer.subscribe(Arrays.asList(topic));
 
+        // trying seek and assign
+        TopicPartition partitionToReadFrom = new TopicPartition(topic, 0);
+//        consumer.assign(Arrays.asList(partitionToReadFrom));
+//        long offsetToReadFrom = 0L;
+//        consumer.seek(partitionToReadFrom, offsetToReadFrom);
+
         // poll for new data
         try {
             while (true) {
@@ -49,10 +56,11 @@ public class MSSQLConsumer {
                     logger.info("Received " + recordCount + " records");
 
                     // write records to ms sql
+                    Connection conn = null;
                     try {
                         DriverManager.registerDriver(new com.microsoft.sqlserver.jdbc.SQLServerDriver());
                         String dbURL = "jdbc:sqlserver://localhost:1433;database=demo;user=sa;password=Admin123";
-                        Connection conn = DriverManager.getConnection(dbURL);
+                        conn = DriverManager.getConnection(dbURL);
                         logger.info("Connected");
                         Statement statement = conn.createStatement();
                         String sql = "BEGIN TRAN T1";
@@ -69,13 +77,26 @@ public class MSSQLConsumer {
                         logger.info(sql);
                         statement.executeUpdate(sql);
 
-                        conn.close();
-
                         logger.info("Committing the offsets...");
                         consumer.commitSync();
                         logger.info("Offsets have been committed!");
                     } catch (Exception e) {
                         e.printStackTrace();
+                        logger.info("Going back to the beginning");
+                        consumer.seekToBeginning(Arrays.asList(partitionToReadFrom));
+                        try {
+                            Thread.sleep(3000);
+                        } catch (InterruptedException interruptedException) {
+                            interruptedException.printStackTrace();
+                        }
+                    } finally {
+                        if (conn != null) {
+                            try {
+                                conn.close();
+                            } catch (SQLException throwables) {
+                                throwables.printStackTrace();
+                            }
+                        }
                     }
                 } else {
                     logger.info("No records");
