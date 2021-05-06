@@ -1,0 +1,5 @@
+.DS_Store
+.idea/
+kafka-consumer-mssql.iml
+src/.DS_Store
+target/
