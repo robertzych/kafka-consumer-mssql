@@ -41,7 +41,7 @@ public class MSSQLConsumer {
         consumer.subscribe(Arrays.asList(topic));
 
         // trying seek and assign
-        TopicPartition partitionToReadFrom = new TopicPartition(topic, 0);
+        TopicPartition partitionToReadFrom = new TopicPartition(topic, 0);  // TODO: what if multiple partitions?
 //        consumer.assign(Arrays.asList(partitionToReadFrom));
 //        long offsetToReadFrom = 0L;
 //        consumer.seek(partitionToReadFrom, offsetToReadFrom);
@@ -83,12 +83,8 @@ public class MSSQLConsumer {
                     } catch (Exception e) {
                         e.printStackTrace();
                         logger.info("Going back to the beginning");
-                        consumer.seekToBeginning(Arrays.asList(partitionToReadFrom));
-                        try {
-                            Thread.sleep(3000);
-                        } catch (InterruptedException interruptedException) {
-                            interruptedException.printStackTrace();
-                        }
+                        consumer.seekToBeginning(Arrays.asList(partitionToReadFrom)); // TODO: seek to last committed offset
+                        sleep();
                     } finally {
                         if (conn != null) {
                             try {
@@ -100,10 +96,19 @@ public class MSSQLConsumer {
                     }
                 } else {
                     logger.info("No records");
+                    sleep();
                 }
             }
         } finally {
             consumer.close();
+        }
+    }
+
+    private static void sleep() {
+        try {
+            Thread.sleep(3000);
+        } catch (InterruptedException interruptedException) {
+            interruptedException.printStackTrace();
         }
     }
 }
