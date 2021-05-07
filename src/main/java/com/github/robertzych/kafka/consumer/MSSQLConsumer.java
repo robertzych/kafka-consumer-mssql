@@ -8,18 +8,26 @@ import org.apache.kafka.common.serialization.StringDeserializer;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
+import java.io.IOException;
+import java.nio.charset.Charset;
+import java.nio.file.Files;
+import java.nio.file.Paths;
 import java.sql.Connection;
 import java.sql.DriverManager;
 import java.sql.SQLException;
 import java.sql.Statement;
 import java.time.Duration;
 import java.util.Arrays;
+import java.util.Collection;
 import java.util.Properties;
 //https://docs.confluent.io/platform/current/schema-registry/serdes-develop/serdes-json.html
 public class MSSQLConsumer {
-    public static void main(String[] args) {
-        Logger logger = LoggerFactory.getLogger(MSSQLConsumer.class.getName());
 
+    final static String OFFSET_FILE_PREFIX = "./offsets/offset_";
+    final static Logger logger = LoggerFactory.getLogger(MSSQLConsumer.class.getName());
+    final static boolean SIMULATE_CRASH = false;
+
+    public static void main(String[] args) {
         //https://kafka.apache.org/documentation/#consumerconfigs
         String boostrapServers = "127.0.0.1:9092";
         String groupId = "group1";
@@ -37,14 +45,11 @@ public class MSSQLConsumer {
 
         // create consumer
         String topic = "book";
-        final Consumer<String, Book> consumer = new KafkaConsumer<>(props);
-        consumer.subscribe(Arrays.asList(topic));
+        final KafkaConsumer<String, Book> consumer = new KafkaConsumer<>(props);
+        ConsumerRebalanceListener listener = createListener(consumer);
+        consumer.subscribe(Arrays.asList(topic), listener);
 
-        // trying seek and assign
-        TopicPartition partitionToReadFrom = new TopicPartition(topic, 0);  // TODO: what if multiple partitions?
-//        consumer.assign(Arrays.asList(partitionToReadFrom));
-//        long offsetToReadFrom = 0L;
-//        consumer.seek(partitionToReadFrom, offsetToReadFrom);
+        TopicPartition partitionToReadFrom = new TopicPartition(topic, 0);
 
         // poll for new data
         try {
@@ -63,27 +68,27 @@ public class MSSQLConsumer {
                         conn = DriverManager.getConnection(dbURL);
                         logger.info("Connected");
                         Statement statement = conn.createStatement();
-                        String sql = "BEGIN TRAN T1";
-                        logger.info(sql);
-                        statement.executeUpdate(sql);
+                        String sql;
                         for (ConsumerRecord<String, Book> record : records) {
+                            logger.info("offset={}, timestamp={}", record.offset(), record.timestamp());
                             Book book = record.value();
+                            if (SIMULATE_CRASH && book.id == 3) {
+                                logger.error("SIMULATING A CRASH!");
+                                return;
+                            }
                             sql = "INSERT INTO books VALUES (" + book.id + ", '" + book.title + "')";
                             logger.info(sql);
                             statement.executeUpdate(sql);
+                            Files.write(Paths.get(OFFSET_FILE_PREFIX + record.partition()),
+                                    Long.valueOf(record.offset()+1).toString().getBytes());
                         }
-
-                        sql = "COMMIT TRAN T1";
-                        logger.info(sql);
-                        statement.executeUpdate(sql);
-
                         logger.info("Committing the offsets...");
                         consumer.commitSync();
                         logger.info("Offsets have been committed!");
                     } catch (Exception e) {
                         e.printStackTrace();
-                        logger.info("Going back to the beginning");
-                        consumer.seekToBeginning(Arrays.asList(partitionToReadFrom)); // TODO: seek to last committed offset
+                        logger.info("Resetting to the last committed offset");
+                        seekToCommittedOffset(partitionToReadFrom, consumer);
                         sleep();
                     } finally {
                         if (conn != null) {
@@ -109,6 +114,37 @@ public class MSSQLConsumer {
             Thread.sleep(3000);
         } catch (InterruptedException interruptedException) {
             interruptedException.printStackTrace();
+        }
+    }
+
+    private static ConsumerRebalanceListener createListener(KafkaConsumer<String, Book> consumer){
+        return new ConsumerRebalanceListener() {
+            @Override
+            public void onPartitionsRevoked(Collection<TopicPartition> partitions) {
+                // nothing to do...
+            }
+
+            @Override
+            public void onPartitionsAssigned(Collection<TopicPartition> partitions) {
+                for (TopicPartition partition : partitions) {
+                    seekToCommittedOffset(partition, consumer);
+                }
+            }
+        };
+    }
+
+    private static void seekToCommittedOffset(TopicPartition partition, KafkaConsumer<String, Book> consumer) {
+        try {
+            if(Files.exists(Paths.get(OFFSET_FILE_PREFIX + partition.partition()))){
+                long offset = Long.parseLong(
+                        Files.readAllLines(
+                                Paths.get(OFFSET_FILE_PREFIX + partition.partition()),
+                                Charset.defaultCharset()).get(0));
+                logger.info("Consumer offset set to {}", offset);
+                consumer.seek(partition, offset);
+            }
+        } catch(IOException e) {
+            logger.error("Could not read offset from file");
         }
     }
 }
